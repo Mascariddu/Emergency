@@ -17,6 +17,7 @@ public class Simulatore {
 	// Modello del Mondo
 	private List<Paziente> pazienti;
 	private int studiLiberi;
+	private PriorityQueue<Paziente> salaAttesa;
 
 	// Parametri di simulazione
 	private int NS = 3; // numero di studi medici
@@ -33,6 +34,7 @@ public class Simulatore {
 	private int TIMEOUT_WHITE = 120;
 	private int TIMEOUT_YELLOW = 60;
 	private int TIMEOUT_RED = 90;
+	private Duration intervalloPolling = Duration.ofMinutes(5);
 
 	// Statistiche da calcolare
 	private int numDimessi;
@@ -57,6 +59,8 @@ public class Simulatore {
 			oraArrivo = oraArrivo.plus(T_ARRIVAL);
 		}
 
+		this.salaAttesa = new PriorityQueue<Paziente>(new prioritaPaziente());
+		
 		// Creare gli studi medici
 		studiLiberi = NS;
 
@@ -68,6 +72,8 @@ public class Simulatore {
 			queue.add(new Evento(p.getOraArrivo(), TipoEvento.ARRIVO, p));
 		}
 
+		queue.add(new Evento(T_inizio.plus(intervalloPolling),TipoEvento.POLLING,null));
+		
 		// Resettare le statistiche
 		numDimessi = 0;
 		numAbbandoni = 0;
@@ -104,21 +110,48 @@ public class Simulatore {
 				else if (p.getStato() == StatoPaziente.WAITING_RED)
 					queue.add(new Evento(ev.getOra().plusMinutes(TIMEOUT_RED), TipoEvento.TIMEOUT, p));
 
+				salaAttesa.add(p);
+				
 				ruotaNuovoStatoPaziente();
 
 				break;
 
 			case VISITA:
 				// determina il paziente con max priorità
+				Paziente pChiamato = salaAttesa.poll();
+				if(pChiamato == null)
+					break;
+
 				// paziente entra in uno studio
+				StatoPaziente vecchioStato = pChiamato.getStato();
+				pChiamato.setStato(StatoPaziente.TREATING);
 				// studio diventa occupato
+				studiLiberi--;
+				
 				// schedula l'uscita (CURATO) del paziente
+				if(vecchioStato == StatoPaziente.WAITING_RED) {
+					queue.add(new Evento(ev.getOra().plusMinutes(DURATION_RED),TipoEvento.CURATO,pChiamato));
+				}
+				
+				if(vecchioStato == StatoPaziente.WAITING_YELLOW) {
+					queue.add(new Evento(ev.getOra().plusMinutes(DURATION_YELLOW),TipoEvento.CURATO,pChiamato));
+				}
+				
+				if(vecchioStato == StatoPaziente.WAITING_WHITE) {
+					queue.add(new Evento(ev.getOra().plusMinutes(DURATION_WHITE),TipoEvento.CURATO,pChiamato));
+				}
+				
 				break;
 
 			case CURATO:
 				// paziente è fuori
+				p.setStato(StatoPaziente.OUT);
 				// aggiorna numDimessi
+				numDimessi++;
 				// schedula evento VISITA "adesso"
+				studiLiberi++;
+				queue.add(new Evento(ev.getOra(),TipoEvento.VISITA,null));
+				
 				break;
 
 			case TIMEOUT:
@@ -136,6 +169,16 @@ public class Simulatore {
 				}
 
 				break;
+				
+			case POLLING:
+				//verifica se ci sono pazienti in attea con studi liberi
+				//rischedula se stesso
+				if(!salaAttesa.isEmpty() && studiLiberi> 0) {
+					queue.add(new Evento(ev.getOra(), TipoEvento.VISITA, null));
+				}
+				
+				if(ev.getOra().isBefore(T_fine))
+					queue.add(new Evento(ev.getOra().plus(intervalloPolling),TipoEvento.POLLING,null));
 			}
 
 		}
